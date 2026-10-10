@@ -1,0 +1,8 @@
+{
+  "name": "snake-draft-copilot",
+  "version": "1.0.0",
+  "description": "A one-page fantasy football snake-draft helper: who to take, who can wait, and what to queue.",
+  "main": "engine.js",
+  "scripts": { "test": "node --test test/" },
+  "license": "MIT"
+}

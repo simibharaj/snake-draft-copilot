@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snake Draft Copilot</title>
+<style>
+  :root { --ink:#1d1d1f; --mute:#5f6368; --line:#ececec; --accent:#0a7d4f; --accent-l:#e7f5ee; --warn:#b45309; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; color:var(--ink); background:#fff; }
+  main { max-width:760px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { font:700 26px Georgia,serif; margin:0 0 4px; }
+  h2 { font:700 17px Georgia,serif; margin:0 0 10px; }
+  .sub { color:var(--mute); margin:0 0 18px; }
+  .setup { display:flex; flex-wrap:wrap; gap:12px; align-items:center; font-size:14px; margin-bottom:18px; }
+  .setup label { display:flex; align-items:center; gap:6px; }
+  .setup input[type=number] { width:58px; padding:6px; border:1px solid #d6d6d6; border-radius:8px; font-size:15px; }
+  .linkbtn { background:none; border:none; color:var(--accent); cursor:pointer; padding:0; font-size:14px; text-decoration:underline; }
+  .answer { background:var(--accent-l); border-radius:16px; padding:18px; margin-bottom:22px; }
+  .when { color:var(--mute); font-size:14px; }
+  .when b { color:var(--ink); }
+  .take { font:700 28px Georgia,serif; margin:6px 0 2px; }
+  .why { color:var(--mute); font-size:14px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+  button.main { background:var(--accent); color:#fff; border:none; border-radius:10px; padding:10px 16px; font-size:15px; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--ink); border:1px solid #d6d6d6; border-radius:10px; padding:10px 16px; font-size:15px; cursor:pointer; }
+  .wait { margin-top:14px; font-size:14px; }
+  .wait div { margin-top:4px; }
+  section { margin-bottom:26px; }
+  textarea, input.search { width:100%; border:1px solid #d6d6d6; border-radius:10px; padding:10px; font:15px inherit; font-family:inherit; }
+  textarea { min-height:70px; resize:vertical; }
+  .hint { color:var(--mute); font-size:13px; margin-top:6px; }
+  ol.queue { margin:0; padding-left:22px; }
+  ol.queue li { padding:3px 0; }
+  .pos { display:inline-block; min-width:34px; text-align:center; font-size:11px; font-weight:700; border-radius:5px; padding:1px 5px; margin-right:6px; background:#f1f1f1; color:#333; }
+  .tag { color:var(--warn); font-size:12px; margin-left:6px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:6px 4px; border-bottom:1px solid var(--line); }
+  td.num { text-align:right; color:var(--mute); }
+  .flash { color:var(--accent); font-size:13px; min-height:18px; margin-top:6px; }
+  .suggest { border:1px solid var(--line); border-radius:10px; margin-top:4px; }
+  .suggest div { padding:8px 10px; cursor:pointer; }
+  .suggest div:hover, .suggest div.active { background:var(--accent-l); }
+  footer { color:var(--mute); font-size:12px; margin-top:30px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Snake Draft Copilot</h1>
+  <p class="sub">Tells you who to take, who can wait, and what to put in your queue.</p>
+
+  <div class="setup">
+    <label>Teams <input id="teams" type="number" min="4" max="16" value="10"></label>
+    <label>Your pick <input id="slot" type="number" min="1" max="16" value="1"></label>
+    <label>Rounds <input id="rounds" type="number" min="8" max="20" value="16"></label>
+    <button class="linkbtn" id="loadBtn">Use my own rankings (CSV)</button>
+    <input type="file" id="file" accept=".csv,text/csv" hidden>
+  </div>
+
+  <div class="answer" id="answer"></div>
+
+  <section>
+    <h2>1. Paste what's been picked</h2>
+    <textarea id="paste" placeholder="Copy the draft board, pick list or chat and paste it here. Players found are marked as taken."></textarea>
+    <div class="flash" id="pasteMsg"></div>
+  </section>
+
+  <section>
+    <h2>2. Who did you take?</h2>
+    <input class="search" id="mineInput" placeholder="Type a name, press Enter" autocomplete="off">
+    <div class="suggest" id="suggest" hidden></div>
+    <div class="hint">Or tap "I took this" in the green box.</div>
+  </section>
+
+  <section>
+    <h2>Your queue</h2>
+    <ol class="queue" id="queue"></ol>
+    <div class="row"><button class="ghost" id="copyQueue">Copy queue</button></div>
+    <div class="flash" id="copyMsg"></div>
+  </section>
+
+  <section>
+    <h2>Your team</h2>
+    <table id="team"></table>
+    <div class="row"><button class="ghost" id="undo">Undo last</button><button class="ghost" id="reset">Start over</button></div>
+  </section>
+
+  <footer>Sample data uses made-up players. Load your league's projections for real use. For fun, not advice.</footer>
+</main>
+
+<script src="engine.js"></script>
+<script src="data/sample-players.js"></script>
+<script>
+(function () {
+  const E = window.DraftEngine;
+  const $ = (id) => document.getElementById(id);
+  const KEY = "snakeDraftCopilot_v1";
+  let players = [];
+  let S = load() || { taken: [], mine: [], log: [], csv: null, league: { teams: 10, slot: 1, rounds: 16 } };
+
+  function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch (e) { return null; } }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const league = () => Object.assign({}, E.DEFAULT_LEAGUE, S.league);
+  const state = () => ({ players, takenNames: new Set(S.taken), mineNames: new Set(S.mine) });
+
+  function markTaken(names) {
+    const known = new Set(S.taken.concat(S.mine));
+    const fresh = names.filter((n) => !known.has(n));
+    fresh.forEach((n) => { S.taken.push(n); S.log.push({ n, who: "taken" }); });
+    return fresh.length;
+  }
+  function markMine(name) {
+    S.taken = S.taken.filter((n) => n !== name);
+    if (!S.mine.includes(name)) { S.mine.push(name); S.log.push({ n: name, who: "mine" }); }
+    save(); render();
+  }
+
+  function render() {
+    ["teams", "slot", "rounds"].forEach((k) => ($(k).value = S.league[k]));
+    const ev = E.evaluate(state(), league());
+    const away = ev.yourPick ? ev.yourPick - ev.currentPick : null;
+    let html = "";
+    if (!ev.pick) {
+      html = '<div class="take">Draft done</div>';
+    } else {
+      const p = ev.pick.player;
+      html += '<div class="when">' + (away === 0 ? "<b>You're on the clock</b> (pick " + ev.yourPick + ")" :
+        "Your next pick: <b>#" + ev.yourPick + "</b>, " + away + " pick" + (away === 1 ? "" : "s") + " away") + "</div>";
+      html += '<div class="take">' + esc(p.name) + ' <span class="pos">' + p.pos + "</span></div>";
+      html += '<div class="why">' + esc([p.team, "bye " + (p.bye ?? "?"), Math.round(p.proj) + " proj"].concat(ev.pick.notes).join(" · ")) + "</div>";
+      html += '<div class="row"><button class="main" data-mine="' + esc(p.name) + '">I took this</button></div>';
+      if (ev.canWait.length && ev.nextAfter) {
+        html += '<div class="wait"><b>Can wait until #' + ev.nextAfter + ":</b>" + ev.canWait.map((r) =>
+          "<div>" + esc(r.player.name) + " (" + r.player.pos + ") · " + Math.round(r.lastsToNext * 100) + "% chance he's still there</div>").join("") + "</div>";
+      }
+    }
+    $("answer").innerHTML = html;
+
+    $("queue").innerHTML = ev.ranked.slice(0, 15).map((r) =>
+      '<li><span class="pos">' + r.player.pos + "</span>" + esc(r.player.name) +
+      (r.player.status ? '<span class="tag">' + esc(r.player.status) + "</span>" : "") + "</li>").join("");
+
+    const order = ["QB", "RB", "WR", "TE", "K", "DST"];
+    const byeCount = {};
+    ev.roster.forEach((p) => { if (p.bye != null && p.pos !== "K" && p.pos !== "DST") byeCount[p.bye] = (byeCount[p.bye] || 0) + 1; });
+    $("team").innerHTML = ev.roster.length ? ev.roster.slice().sort((a, b) => order.indexOf(a.pos) - order.indexOf(b.pos)).map((p) =>
+      '<tr><td><span class="pos">' + p.pos + "</span>" + esc(p.name) + '</td><td class="num">bye ' + (p.bye ?? "?") +
+      (byeCount[p.bye] >= 3 ? '<span class="tag">shared by ' + byeCount[p.bye] + "</span>" : "") + "</td></tr>").join("")
+      : '<tr><td class="num" style="text-align:left">No picks yet</td></tr>';
+  }
+
+  // Paste: detect names automatically.
+  let pasteTimer;
+  $("paste").addEventListener("input", () => {
+    clearTimeout(pasteTimer);
+    pasteTimer = setTimeout(() => {
+      const found = E.matchNames($("paste").value, players);
+      const n = markTaken(found);
+      $("pasteMsg").textContent = found.length ? n + " new player" + (n === 1 ? "" : "s") + " marked taken (" + found.length + " found)." : "No known players found yet.";
+      save(); render();
+    }, 300);
+  });
+
+  // "Who did you take?" search with suggestions.
+  let sugg = [], active = 0;
+  function showSuggest() {
+    const q = E.normalizeName($("mineInput").value);
+    if (q.length < 2) { $("suggest").hidden = true; sugg = []; return; }
+    sugg = players.filter((p) => !S.mine.includes(p.name) && !S.taken.includes(p.name) && E.normalizeName(p.name).includes(q)).slice(0, 6);
+    active = 0;
+    $("suggest").hidden = !sugg.length;
+    $("suggest").innerHTML = sugg.map((p, i) => '<div data-i="' + i + '" class="' + (i === 0 ? "active" : "") + '"><span class="pos">' + p.pos + "</span>" + esc(p.name) + "</div>").join("");
+  }
+  function chooseSuggest(i) {
+    if (!sugg[i]) return;
+    markMine(sugg[i].name);
+    $("mineInput").value = ""; $("suggest").hidden = true;
+  }
+  $("mineInput").addEventListener("input", showSuggest);
+  $("mineInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); chooseSuggest(active); }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + sugg.length) % Math.max(sugg.length, 1);
+      [...$("suggest").children].forEach((d, i) => d.classList.toggle("active", i === active));
+    }
+  });
+  $("suggest").addEventListener("click", (e) => { const d = e.target.closest("[data-i]"); if (d) chooseSuggest(+d.dataset.i); });
+  $("answer").addEventListener("click", (e) => { const b = e.target.closest("[data-mine]"); if (b) markMine(b.dataset.mine); });
+
+  $("copyQueue").addEventListener("click", () => {
+    const text = E.buildQueue(state(), league(), 15).join("\n");
+    const done = () => ($("copyMsg").textContent = "Copied. Put them in your draft app's queue in this order.");
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => ($("copyMsg").textContent = text));
+    else $("copyMsg").textContent = text;
+  });
+  $("undo").addEventListener("click", () => {
+    const last = S.log.pop(); if (!last) return;
+    S[last.who === "mine" ? "mine" : "taken"] = S[last.who === "mine" ? "mine" : "taken"].filter((n) => n !== last.n);
+    save(); render();
+  });
+  $("reset").addEventListener("click", () => {
+    if (!confirm("Clear all picks?")) return;
+    S.taken = []; S.mine = []; S.log = []; $("paste").value = ""; $("pasteMsg").textContent = "";
+    save(); render();
+  });
+  ["teams", "slot", "rounds"].forEach((k) => $(k).addEventListener("change", () => {
+    S.league[k] = Math.max(1, parseInt($(k).value, 10) || S.league[k]); save(); render();
+  }));
+  $("loadBtn").addEventListener("click", () => $("file").click());
+  $("file").addEventListener("change", () => {
+    const f = $("file").files[0]; if (!f) return;
+    f.text().then((t) => {
+      try { players = E.parseCsv(t); S.csv = t; S.taken = []; S.mine = []; S.log = []; save(); render(); }
+      catch (err) { alert(err.message); }
+    });
+  });
+
+  function start(csvText) {
+    try { players = E.parseCsv(csvText); } catch (e) { players = []; }
+    render();
+  }
+  if (S.csv) start(S.csv);
+  else if (window.SAMPLE_CSV) start(window.SAMPLE_CSV);
+  else $("answer").innerHTML = '<div class="why">No sample data found. Use "Use my own rankings (CSV)" above.</div>';
+})();
+</script>
+</body>
+</html>
